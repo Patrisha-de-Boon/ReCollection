@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<!-- This file is based on the file at the following source https://github.com/yushulx/web-camera-recorder/blob/master/templates/index.html -->
+<html>
+<head>
+  <title>ReCollector</title>
+  <script type="text/javascript" src="http://code.jquery.com/jquery-1.7.1.min.js"></script>
+  <script type="text/javascript" src="../static/recorder.js"></script>
+</head>
+<body>
+  <form name="login">
+    Username<input type="text" name="userid"/>
+    Password<input type="password" name="pswrd"/>
+    <input type="button" onclick="signUp(this.form)" value="Sign Up"/>
+    <input type="reset" value="Cancel"/>
+  </form>
+  <div id="logged-in">
+    <h1>ReCollector</h1>
+    <video autoplay></video>
+    <canvas style="display:none;"></canvas>
+  </div>
+</body>
+</html>

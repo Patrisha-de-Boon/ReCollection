@@ -1,10 +1,11 @@
 """ This module handles user authentication and retrieval of user data"""
 
-## This is from the following source
+## This is based on the following sources
 ## https://github.com/miguelgrinberg/REST-auth/blob/master/api.py
+## https://dev.to/carlosemv/dockerizing-a-flask-based-web-camera-application-469m
 
 import os
-from flask import Flask, abort, request, jsonify, g, url_for
+from flask import Flask, abort, render_template, request, jsonify, g, url_for
 from flask_sqlalchemy import SQLAlchemy
 from flask_httpauth import HTTPBasicAuth
 from passlib.apps import custom_app_context as pwd_context
@@ -18,6 +19,23 @@ APP = Flask(__name__)
 APP.config['SECRET_KEY'] = '07e4ad11-3538-42f9-bfd4-6e559eefe22d'
 APP.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///db.sqlite'
 APP.config['SQLALCHEMY_COMMIT_ON_TEARDOWN'] = True
+
+##########################################
+# Camera
+##########################################
+# This is based on the following source
+# https://github.com/yushulx/web-camera-recorder/blob/master/server.py
+
+@APP.route('/')
+def index():
+    '''
+        Display the index page which contains the UI for this application
+    '''
+    return render_template('index.html')
+
+##########################################
+## Database and Facial Recognition
+##########################################
 
 # extensions
 DB = SQLAlchemy(APP)
@@ -124,9 +142,11 @@ def new_user():
     '''
     username = request.json.get('username')
     password = request.json.get('password')
+    print("username: " + username)
+    print("password: " + password)
     if username is None or password is None:
         abort(400)    # missing arguments
-    if User.query.filter_by(username=username).first() is not None:
+    if not User.query.filter_by(username=username).first() is None:
         abort(400)    # existing user
     user = User(username=username)
     user.hash_password(password)
@@ -263,6 +283,10 @@ def recognize():
     threshold = 0.7
     images = request.files['image']
     aligned = facenet.align_face(images)
+
+    if aligned == images:
+        return jsonify({'is_person': False})
+
     encoding = facenet.embedding(aligned)[0]
     recognitions = Recognition.query.filter_by(user_id=g.user.id).all()
 
@@ -273,11 +297,11 @@ def recognize():
         if diff < threshold and diff < closest_diff:
             closest_match = recognition
     if closest_match is not None:
-        return jsonify({'recogntion_id': closest_match.id})
+        return jsonify({'is_person': True, 'recogntion_id': closest_match.id})
     else:
-        return jsonify({'recogntion_id': -1})
+        return jsonify({'is_person': True, 'recogntion_id': -1})
 
 if __name__ == '__main__':
     if not os.path.exists('db.sqlite'):
         DB.create_all()
-    APP.run(debug=True)
+    APP.run(host='0.0.0.0', port=8000, threaded=True, debug=True)
