@@ -11,6 +11,7 @@ from passlib.apps import custom_app_context as pwd_context
 from itsdangerous import (TimedJSONWebSignatureSerializer
                           as Serializer, BadSignature, SignatureExpired)
 from easyfacenet.simple import facenet
+from scipy import spatial
 
 # initialization
 APP = Flask(__name__)
@@ -65,15 +66,39 @@ class User(DB.Model):
         user = User.query.get(data['id'])
         return user
 
+class Image(DB.Model):
+    '''
+        Data about an image associated with a particular recognition
+    '''
+    __tablename__ = 'images'
+    id = DB.Column(DB.Integer, primary_key=True)
+    recognition_id = DB.Column(DB.Integer, DB.ForeignKey("recognitions.id"), nullable=False)
+    location = DB.Column(DB.VARCHAR)
+    encoding = DB.Column(DB.Integer, nullable=False)
+
 class Recognition(DB.Model):
     '''
         The data for people who have been recognized by the system
     '''
     __tablename__ = 'recognitions'
     id = DB.Column(DB.Integer, primary_key=True)
-    user_id = DB.Column(DB.String(32), DB.ForeignKey("users.id"), nullable=False)
+    user_id = DB.Column(DB.Integer, DB.ForeignKey("users.id"), nullable=False)
     name = DB.Column(DB.String(32))
-    latest_encoding = DB.Column(DB.Integer, nullable=False, index=True)
+    encoding = DB.Column(DB.Integer, nullable=False, index=True)
+
+    def recalculate(self):
+        '''
+            recalculate the average encoding for this person by taking
+            the average encoding of each of their images
+        '''
+        images = Image.query.filter_by(recognition_id=self.id).all()
+
+        if images is not None and len(images) > 0:
+            sum_encodings = 0
+            for image in images:
+                sum_encodings += image.encoding
+            self.encoding = sum/len(images)
+
 
 @AUTH.verify_password
 def verify_password(username_or_token, password):
@@ -132,13 +157,102 @@ def get_auth_token():
     return jsonify({'token': token.decode('ascii'), 'duration': 600})
 
 
-@APP.route('/api/resource')
+@APP.route('/api/recognitions', methods=['POST'])
 @AUTH.login_required
-def get_resource():
+def new_recognition():
     '''
-       Get a resource from the logged in user's database
+        Register a new recognition with the currently logged in user
     '''
-    return jsonify({'data': 'Hello, %s!' % g.user.username})
+    name = request.json.get('name')
+    encoding = request.json.get('encoding')
+    if encoding is None:
+        abort(400)    # missing arguments
+    recognition = Recognition(name=name, encoding=encoding, user_id=g.user.id)
+    DB.session.add(recognition)
+    DB.session.commit()
+    return (jsonify({'name': recognition.name}), 201,
+            {'Location': url_for('get_recognition', recognition_id=recognition.id, _external=True)})
+
+@APP.route('/api/recognitions')
+@AUTH.login_required
+def get_recognitions():
+    '''
+        Get the ids of Recognitions with the information specified in the request.
+        Must specify a name in the request
+    '''
+    name = request.json.get('name')
+    if name is None:
+        abort(400)
+    recognitions = Recognition.query.filter_by(user_id=g.user.id).filter_by(name=name).all()
+
+    ids = ""
+    first = True
+    for recognition in recognitions:
+        if not first:
+            ids += ","
+        else:
+            first = False
+        ids += recognition.id
+
+    return jsonify({'recognition_ids': recognitions})
+
+@APP.route('/api/recognitions/<int:recognition_id>')
+@AUTH.login_required
+def get_recognition_by_id(recognition_id):
+    '''
+        Get a recognition with the given id in the database
+    '''
+    if recognition_id == -1:
+        abort(400)
+    recognition = Recognition.query.get(recognition_id)
+    if not recognition:
+        abort(404)
+    if recognition.user_id == g.user.id:
+        return jsonify({'name': recognition.name})
+    else:
+        abort(401)
+
+@APP.route('/api/images', methods=['POST'])
+@AUTH.login_required
+def new_image():
+    '''
+        Register a new recognition with the currently logged in user
+    '''
+    recognition_id = request.json.get('recognition_id')
+    location = request.json.get('location')
+    image_file = request.files['image']
+    if recognition_id is None or image_file is None:
+        abort(400)    # missing arguments
+    aligned = facenet.align_face(image_file)
+    encoding = facenet.embedding(aligned)[0]
+
+    image = Image(recognition_id=recognition_id, encoding=encoding, location=location)
+    DB.session.add(image)
+    DB.session.commit()
+    return (jsonify({'encoding': image.encoding}), 201,
+            {'Location': url_for('get_image', image_id=image.id, _external=True)})
+
+
+@APP.route('/api/images/<int:image_id>')
+@AUTH.login_required
+def get_image_by_id(image_id):
+    '''
+        Get a image with the given id in the database
+    '''
+    if image_id == -1:
+        abort(400)
+    image = Image.query.get(image_id)
+    if not image:
+        abort(404)
+
+    recognition = Recognition.query.get(image.registration_id)
+    if not recognition:
+        abort(404)
+
+    if recognition.user_id == g.user.id:
+        return jsonify({'encoding': image.encoding, 'location': image.location})
+    else:
+        abort(401)
 
 @APP.route('/api/recognize')
 @AUTH.login_required
@@ -146,17 +260,22 @@ def recognize():
     '''
         See if this user recognizes the given image
     '''
+    threshold = 0.7
     images = request.files['image']
     aligned = facenet.align_face(images)
     encoding = facenet.embedding(aligned)[0]
+    recognitions = Recognition.query.filter_by(user_id=g.user.id).all()
 
-    recognitions = Recognition.query.filter_by(user_id = g.user.id)
-
-    closest-match = 1
-    for recognition in range(len(recognitions)):
-        if 1 - spatial.distance.cosine(encoding, recognition.encoding)
-        
-
+    closest_diff = 1
+    closest_match = None
+    for recognition in recognitions:
+        diff = 1 - spatial.distance.cosine(encoding, recognition.encoding)
+        if diff < threshold and diff < closest_diff:
+            closest_match = recognition
+    if closest_match is not None:
+        return jsonify({'recogntion_id': closest_match.id})
+    else:
+        return jsonify({'recogntion_id': -1})
 
 if __name__ == '__main__':
     if not os.path.exists('db.sqlite'):
